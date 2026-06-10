@@ -1,0 +1,160 @@
+<!--
+  sim_navigation.launch — 仿真多点导航 (一键启动)
+  ================================================
+  功能: Gazebo 仿真 + map_server(载图) + AMCL(定位) + move_base(导航)
+
+  使用:
+    roslaunch robot_sim sim_navigation.launch map_file:=/home/xxx/maps/sim_map.yaml
+
+  前提:
+    已通过 sim_slam.launch 建好图, 并用 map_saver 保存
+
+  启动后:
+    方式A: RViz 中用 "2D Nav Goal" 点目的地
+    方式B: rosrun robot_bringup send_goals.py _goals:="[(1,2,0),(3,4,1.57)]"
+-->
+<launch>
+
+  <arg name="world_file"  default="$(find robot_sim)/worlds/room.world"/>
+  <arg name="map_file"    default=""/>   <!-- 必须指定! -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="gui"          default="true"/>
+  <arg name="paused"       default="false"/>
+
+  <!-- ============================================================ -->
+  <!-- 1. 仿真 (Gazebo + 机器人)                                       -->
+  <!-- ============================================================ -->
+  <include file="$(find robot_sim)/launch/simulation.launch">
+    <arg name="world_file"   value="$(arg world_file)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="gui"          value="$(arg gui)"/>
+    <arg name="paused"       value="$(arg paused)"/>
+  </include>
+
+  <!-- ============================================================ -->
+  <!-- 2. 地图服务                                                     -->
+  <!-- ============================================================ -->
+  <node name="map_server" pkg="map_server" type="map_server"
+        args="$(arg map_file)" output="screen">
+    <param name="frame_id" value="map"/>
+  </node>
+
+  <!-- ============================================================ -->
+  <!-- 3. AMCL 定位                                                    -->
+  <!-- ============================================================ -->
+  <node name="amcl" pkg="amcl" type="amcl" output="screen">
+    <param name="base_frame_id"   value="base_footprint"/>
+    <param name="odom_frame_id"   value="odom"/>
+    <param name="global_frame_id" value="map"/>
+
+    <param name="min_particles" value="500"/>
+    <param name="max_particles" value="2000"/>
+
+    <param name="initial_pose_x" value="0.0"/>
+    <param name="initial_pose_y" value="0.0"/>
+    <param name="initial_pose_a" value="0.0"/>
+    <param name="initial_cov_xx" value="0.1"/>
+    <param name="initial_cov_yy" value="0.1"/>
+    <param name="initial_cov_aa" value="0.05"/>
+
+    <!-- 里程计噪声 (仿真里程计零噪声) -->
+    <param name="odom_model_type" value="diff-corrected"/>
+    <param name="odom_alpha1" value="0.005"/>
+    <param name="odom_alpha2" value="0.005"/>
+    <param name="odom_alpha3" value="0.005"/>
+    <param name="odom_alpha4" value="0.005"/>
+
+    <!-- 激光 -->
+    <param name="laser_model_type"  value="likelihood_field"/>
+    <param name="laser_min_range"   value="0.15"/>
+    <param name="laser_max_range"   value="10.0"/>
+    <param name="laser_max_beams"   value="180"/>
+    <param name="laser_z_hit"       value="0.95"/>
+    <param name="laser_z_rand"      value="0.05"/>
+
+    <param name="resample_interval" value="2"/>
+    <param name="update_min_d" value="0.1"/>
+    <param name="update_min_a" value="0.1"/>
+    <param name="transform_tolerance" value="0.5"/>
+  </node>
+
+  <!-- ============================================================ -->
+  <!-- 4. move_base 导航                                              -->
+  <!-- ============================================================ -->
+  <node name="move_base" pkg="move_base" type="move_base" output="screen">
+
+    <!-- 规划器 -->
+    <param name="base_global_planner" value="navfn/NavfnROS"/>
+    <param name="base_local_planner"  value="base_local_planner/TrajectoryPlannerROS"/>
+
+    <param name="controller_frequency" value="10.0"/>
+    <param name="planner_frequency"    value="1.0"/>
+
+    <!-- === 全局代价地图 === -->
+    <param name="global_costmap/global_frame"      value="map"/>
+    <param name="global_costmap/robot_base_frame"  value="base_footprint"/>
+    <param name="global_costmap/update_frequency"  value="2.0"/>
+    <param name="global_costmap/publish_frequency" value="1.0"/>
+    <param name="global_costmap/static_map"        value="true"/>
+    <param name="global_costmap/rolling_window"    value="false"/>
+    <param name="global_costmap/width"             value="20.0"/>
+    <param name="global_costmap/height"            value="20.0"/>
+    <param name="global_costmap/resolution"        value="0.05"/>
+
+    <!-- === 局部代价地图 === -->
+    <param name="local_costmap/global_frame"       value="odom"/>
+    <param name="local_costmap/robot_base_frame"   value="base_footprint"/>
+    <param name="local_costmap/update_frequency"   value="10.0"/>
+    <param name="local_costmap/publish_frequency"  value="5.0"/>
+    <param name="local_costmap/static_map"         value="false"/>
+    <param name="local_costmap/rolling_window"     value="true"/>
+    <param name="local_costmap/width"              value="4.0"/>
+    <param name="local_costmap/height"             value="4.0"/>
+    <param name="local_costmap/resolution"         value="0.05"/>
+
+    <!-- === costmap 插件 === -->
+    <rosparam param="global_costmap/plugins">
+      [{name: static_map, type: "costmap_2d::StaticLayer"},
+       {name: obstacles,  type: "costmap_2d::ObstacleLayer"},
+       {name: inflation,  type: "costmap_2d::InflationLayer"}]
+    </rosparam>
+    <rosparam param="local_costmap/plugins">
+      [{name: obstacles, type: "costmap_2d::ObstacleLayer"},
+       {name: inflation, type: "costmap_2d::InflationLayer"}]
+    </rosparam>
+
+    <!-- === 障碍物层 === -->
+    <param name="obstacle_layer/observation_sources"        value="scan"/>
+    <param name="obstacle_layer/scan/data_type"             value="LaserScan"/>
+    <param name="obstacle_layer/scan/topic"                 value="/scan"/>
+    <param name="obstacle_layer/scan/marking"               value="true"/>
+    <param name="obstacle_layer/scan/clearing"              value="true"/>
+    <param name="obstacle_layer/scan/min_obstacle_height"   value="0.0"/>
+    <param name="obstacle_layer/scan/max_obstacle_height"   value="2.0"/>
+    <param name="obstacle_layer/scan/obstacle_range"        value="5.0"/>
+
+    <!-- === 膨胀层 === -->
+    <param name="inflation_layer/inflation_radius"    value="0.35"/>
+    <param name="inflation_layer/cost_scaling_factor" value="3.0"/>
+
+    <!-- === TrajectoryPlanner 局部规划 === -->
+    <param name="TrajectoryPlannerROS/max_vel_x"            value="2.5"/>
+    <param name="TrajectoryPlannerROS/min_vel_x"            value="0.1"/>
+    <param name="TrajectoryPlannerROS/max_vel_theta"        value="2.0"/>
+    <param name="TrajectoryPlannerROS/min_vel_theta"        value="0.2"/>
+    <param name="TrajectoryPlannerROS/min_in_place_vel_theta" value="0.5"/>
+    <param name="TrajectoryPlannerROS/acc_lim_x"            value="2.0"/>
+    <param name="TrajectoryPlannerROS/acc_lim_theta"        value="2.0"/>
+    <param name="TrajectoryPlannerROS/holonomic_robot"      value="false"/>
+    <param name="TrajectoryPlannerROS/yaw_goal_tolerance"   value="0.1"/>
+    <param name="TrajectoryPlannerROS/xy_goal_tolerance"    value="0.15"/>
+    <param name="TrajectoryPlannerROS/sim_time"             value="1.5"/>
+    <param name="TrajectoryPlannerROS/sim_granularity"      value="0.025"/>
+    <param name="TrajectoryPlannerROS/angular_sim_granularity" value="0.025"/>
+    <param name="TrajectoryPlannerROS/pdist_scale"          value="0.6"/>
+    <param name="TrajectoryPlannerROS/gdist_scale"          value="0.8"/>
+    <param name="TrajectoryPlannerROS/occdist_scale"        value="0.01"/>
+    <param name="TrajectoryPlannerROS/meter_scoring"        value="true"/>
+  </node>
+
+</launch>
